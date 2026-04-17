@@ -18,9 +18,13 @@ Generative Models:
 __version__ = "0.1.0"
 __author__ = "Qi Lu"
 
-from genrec import models
-from genrec import modules
-from genrec import data
-from genrec import trainers
+from importlib import import_module
+
+
+def __getattr__(name):
+    """Lazily import top-level subpackages to avoid eager optional deps."""
+    if name in {"models", "modules", "data", "trainers"}:
+        return import_module(f"genrec.{name}")
+    raise AttributeError(f"module 'genrec' has no attribute '{name}'")
 
 __all__ = ["models", "modules", "data", "trainers", "__version__"]

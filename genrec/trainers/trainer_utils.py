@@ -85,8 +85,18 @@ def setup_wandb(
         step_metrics: Dict mapping metric prefix to step metric name
                      e.g., {"train/*": "global_step", "eval/*": "epoch"}
     """
-    wandb.login()
+    # Use explicit API key to avoid interactive CLI prompts in non-interactive runs.
+    api_key = os.getenv("WANDB_API_KEY")
+    if not api_key:
+        raise EnvironmentError("Please set WANDB_API_KEY environment variable for wandb logging")
+
+    # Ensure child processes and internal wandb code paths see the same key.
+    os.environ["WANDB_API_KEY"] = api_key
+    os.environ.setdefault("WANDB_SILENT", "true")
+
+    wandb.login(key=api_key, anonymous="never", relogin=True, force=True)
     wandb.init(
+        entity="chatbot-rcmd",
         project=project,
         name=run_name,
         config=config,

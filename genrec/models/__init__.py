@@ -15,12 +15,30 @@ Generative Models:
     - NoteLLM: Qwen2-based LLM for note recommendation
 """
 
-from genrec.models.rqvae import RqVae, QuantizeForwardMode
-from genrec.models.tiger import Tiger
-from genrec.models.sasrec import SASRec
-from genrec.models.hstu import HSTU
-from genrec.models.lcrec import LCRec
-from genrec.models.cobra import Cobra
+from importlib import import_module
+
+
+_LAZY_IMPORTS = {
+    "RqVae": "genrec.models.rqvae",
+    "QuantizeForwardMode": "genrec.models.rqvae",
+    "Tiger": "genrec.models.tiger",
+    "SASRec": "genrec.models.sasrec",
+    "HSTU": "genrec.models.hstu",
+    "LCRec": "genrec.models.lcrec",
+    "Cobra": "genrec.models.cobra",
+}
+
+
+def __getattr__(name):
+    """Lazily import model symbols to avoid importing optional dependencies."""
+    module_name = _LAZY_IMPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module 'genrec.models' has no attribute '{name}'")
+
+    module = import_module(module_name)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
 
 __all__ = [
     "RqVae",
