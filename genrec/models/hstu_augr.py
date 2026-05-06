@@ -15,9 +15,9 @@ from typing import Optional, Tuple
 import math
 
 
-class UniGCR(nn.Module):
+class AuGR(nn.Module):
     """
-    UniGCR model for sequential recommendation.
+    AuGR model for sequential recommendation.
 
     Architecture:
         Input -> Item Embedding + (optional) Temporal Encoding
@@ -75,6 +75,11 @@ class UniGCR(nn.Module):
         self.gen_loss_decay = gen_loss_decay
         self.max_steps = max_steps
         self.global_step = 0
+        self.gen_as_aux_task = gen_as_aux_task
+        self.use_last_token_for_ctr = use_last_token_for_ctr
+        self.use_dot_product_logits = use_dot_product_logits
+        assert use_last_token_for_ctr != use_dot_product_logits, "use_last_token_for_ctr and use_dot_product_logits cannot both be True (ambiguous CTR input)"
+
         if self.ctr_mode not in {"bce", "listnet"}:
             raise ValueError(f"Unsupported ctr_mode={ctr_mode}. Use 'bce' or 'listnet'.")
 
@@ -99,12 +104,19 @@ class UniGCR(nn.Module):
         ])
 
         # CTR towers follow the same MLP pattern as the vocab CTR example.
+        if self.use_dot_product_logits:
+            # If using dot product logits, the CTR towers take the raw logits as input
+            ctr_input_dim = num_items + 1
+        else:
+            # Otherwise, they take the final hidden states as input
+            ctr_input_dim = embed_dim
+                
         self.ctr_bce_tower = nn.Sequential(
-            self._build_mlp(embed_dim, ctr_hidden_units, dropout),
+            self._build_mlp(ctr_input_dim, ctr_hidden_units, dropout),
             nn.Linear(ctr_hidden_units[-1], num_items + 1),
         )
         self.ctr_listwise_tower = nn.Sequential(
-            self._build_mlp(embed_dim, ctr_hidden_units, dropout),
+            self._build_mlp(ctr_input_dim, ctr_hidden_units, dropout),
             nn.Linear(ctr_hidden_units[-1], num_items + 1),
         )
 
@@ -235,14 +247,34 @@ class UniGCR(nn.Module):
                 targets.view(-1),
                 ignore_index=0
             )
+        
+        # In sequence-level CTR mode, use the last valid hidden state from each sequence.
+        if self.use_last_token_for_ctr:
+            valid_input_mask = input_ids != 0  # [B, L]
+            last_token_idx = valid_input_mask.long().sum(dim=1).sub(1).clamp(min=0)  # [B]
+            batch_idx = torch.arange(B, device=device)
+            x_last = x[batch_idx, last_token_idx]  # [B, D]
+            ctr_logits = self.ctr_bce_tower(x_last) if self.ctr_mode == "bce" else self.ctr_listwise_tower(x_last)  # [B, V]
+        elif self.use_dot_product_logits:
+            # If using dot product logits, the CTR towers take the raw logits as input
+            ctr_logits = self.ctr_bce_tower(logits) if self.ctr_mode == "bce" else self.ctr_listwise_tower(logits) # [B, L, V]
+        else:
+            # CTR head applied on each token for next-item prediction (shifted input and targets fed from dataloader)
+            ctr_logits = self.ctr_bce_tower(x) if self.ctr_mode == "bce" else self.ctr_listwise_tower(x) # [B, L, V]
 
         ctr_loss = None
         if targets is not None:
             relevance = self._expand_targets_to_relevance(targets)  # [B, L, V]
-            flat_targets = targets.reshape(-1)  # [B*L]
-            flat_logits = logits.reshape(-1, self.num_items + 1)  # [B*L, V]
-            flat_relevance = relevance.reshape(-1, self.num_items + 1)  # [B*L, V]
-            valid_mask = flat_targets != 0
+            if self.use_last_token_for_ctr:
+                seq_targets = targets[batch_idx, last_token_idx]  # [B]
+                flat_logits = ctr_logits  # [B, V]
+                flat_relevance = relevance[batch_idx, last_token_idx, :]  # [B, V]
+                valid_mask = seq_targets != 0
+            else:
+                flat_targets = targets.reshape(-1)  # [B*L]
+                flat_logits = ctr_logits.reshape(-1, self.num_items + 1)  # [B*L, V]
+                flat_relevance = relevance.reshape(-1, self.num_items + 1)  # [B*L, V]
+                valid_mask = flat_targets != 0
 
             if self.ctr_mode == "bce":
                 if valid_mask.any():
@@ -274,6 +306,9 @@ class UniGCR(nn.Module):
 
         if self.training and targets is not None:
             self.global_step += 1
+
+        if self.gen_as_aux_task:
+            return ctr_logits, total_loss
 
         return logits, total_loss
 

@@ -1,24 +1,23 @@
 """
-HSTU Trainer - Hierarchical Sequential Transduction Unit
+SASRec AuGR Trainer - Self-Attentive Sequential Recommendation with CTR head.
 """
 import os
-import pandas as pd
 import gin
 import torch
 import wandb
 
-from genrec.models.ctr_only import CTR
+from genrec.models.sasrec_augr import SASRecWithRank
 from genrec.modules.utils import parse_config, setup_logger
-from genrec.data.amazon_hstu import AmazonHSTUDataset, hstu_collate_fn, hstu_eval_collate_fn
+from genrec.data.amazon_sasrec import AmazonSASRecDataset, sasrec_collate_fn, sasrec_eval_collate_fn
 from genrec.trainers.trainer_utils import (
-    setup_accelerator, setup_wandb, save_checkpoint, log_training_info
+    setup_accelerator, setup_wandb, save_checkpoint, get_parameter_count, log_training_info
 )
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 
-def evaluate(model, dataloader, accelerator, use_temporal_bias=True, top_ks=[1, 5, 10]):
+def evaluate(model, dataloader, accelerator, top_ks=[1, 5, 10]):
     """Evaluate model with Recall@K and NDCG@K."""
     model.eval()
     device = accelerator.device
@@ -31,11 +30,21 @@ def evaluate(model, dataloader, accelerator, use_temporal_bias=True, top_ks=[1, 
         for data in tqdm(dataloader, desc="Evaluating", disable=not accelerator.is_main_process):
             input_ids = data['input_ids'].to(device)
             targets = data['targets'].to(device)
-            timestamps = data['timestamps'].to(device) if use_temporal_bias else None
             B = input_ids.size(0)
 
-            logits, _ = accelerator.unwrap_model(model)(input_ids, timestamps)
-            last_logits = logits[:, -1, :]
+            wrapped_model = accelerator.unwrap_model(model)
+            if getattr(wrapped_model, "gen_as_aux_task", False):
+                hidden = wrapped_model._encode(input_ids)
+                logits = hidden @ wrapped_model.item_embedding.weight.T
+            else:
+                logits, _ = wrapped_model(input_ids)
+
+            if logits.dim() == 3:
+                last_logits = logits[:, -1, :]
+            elif logits.dim() == 2:
+                last_logits = logits
+            else:
+                raise ValueError(f"Unexpected logits shape: {tuple(logits.shape)}")
             last_logits[:, 0] = float('-inf')
 
             max_k = max(top_ks)
@@ -53,7 +62,6 @@ def evaluate(model, dataloader, accelerator, use_temporal_bias=True, top_ks=[1, 
 
             total += B
 
-    # Gather from all GPUs
     def gather(v):
         t = torch.tensor([v], device=device, dtype=torch.float32)
         return accelerator.reduce(t, reduction="sum").item()
@@ -68,20 +76,19 @@ def evaluate(model, dataloader, accelerator, use_temporal_bias=True, top_ks=[1, 
 @gin.configurable
 def train(
     epochs=200, batch_size=128, learning_rate=1e-3, weight_decay=0.0,
-    max_seq_len=50, embed_dim=64, num_heads=2, num_blocks=2, dropout=0.2,
-    num_position_buckets=32, num_time_buckets=64, use_temporal_bias=True,
-    # Loss function: "ce" (full cross-entropy) or "sampled_softmax"
-    loss_type="ce", num_negatives=128, ss_temperature=0.05, ss_l2_norm=True,
+    max_seq_len=50, embed_dim=64, num_heads=2, num_blocks=2, ffn_dim=256, dropout=0.2,
+    loss_type="bce",
     dataset_folder="dataset/amazon", split="beauty",
-    do_eval=True, eval_every_epoch=10, eval_batch_size=256,
+    do_eval=True, eval_every_epoch=1, eval_batch_size=256,
     patience=50,
-    save_dir_root="out/unigcr/amazon/beauty", save_every_epoch=50,
-    wandb_logging=False, wandb_project="unigcr_training", wandb_log_interval=100,
-    amp=True, mixed_precision_type="bf16",
-    ctr_hidden_units=[256,128], ctr_mode="listnet", listnet_scale=20, model_name=None
+    save_dir_root="out/sasrec_augr/amazon/beauty", save_every_epoch=50,
+    wandb_logging=False, wandb_project="sasrec_augr_training", wandb_log_interval=100,
+    amp=True, mixed_precision_type="bf16", lambda_ctr=0.7, lambda_gen=0.3,
+    ctr_hidden_units=[256, 128], ctr_mode="listnet", listnet_scale=20, gen_loss_decay=False,
+    gen_as_aux_task=False, model_name=None, use_last_token_for_ctr=False, use_dot_product_logits=False,
 ):
-    """Train Unigcr model."""
-    logger = setup_logger(save_dir_root, name="Unigcr")
+    """Train SASRec AuGR model."""
+    logger = setup_logger(save_dir_root, name="sasrec_augr")
     accelerator = setup_accelerator(amp=amp, mixed_precision_type=mixed_precision_type)
     device = accelerator.device
 
@@ -93,51 +100,54 @@ def train(
             step_metrics={"train/*": "global_step", "eval/*": "epoch"}
         )
 
-    # Dataset
-    train_ds = AmazonHSTUDataset(root=dataset_folder, split=split, train_test_split="train", max_seq_len=max_seq_len)
-    valid_ds = AmazonHSTUDataset(root=dataset_folder, split=split, train_test_split="valid", max_seq_len=max_seq_len)
-    test_ds = AmazonHSTUDataset(root=dataset_folder, split=split, train_test_split="test", max_seq_len=max_seq_len)
+    train_ds = AmazonSASRecDataset(root=dataset_folder, split=split, train_test_split="train", max_seq_len=max_seq_len)
+    valid_ds = AmazonSASRecDataset(root=dataset_folder, split=split, train_test_split="valid", max_seq_len=max_seq_len)
+    test_ds = AmazonSASRecDataset(root=dataset_folder, split=split, train_test_split="test", max_seq_len=max_seq_len)
 
     num_items = train_ds.num_items
     logger.info(f"Num items: {num_items}, Train: {len(train_ds)}, Valid: {len(valid_ds)}, Test: {len(test_ds)}")
 
-    # Calculate max steps for decay schedule
-    steps_per_epoch = (len(train_ds) + batch_size - 1) // batch_size  # Ceiling division
-    max_steps = steps_per_epoch * epochs
-    logger.info(f"Steps per epoch: {steps_per_epoch}, Total max steps: {max_steps}")
-
-    collate_train = lambda x: hstu_collate_fn(x, max_seq_len)
-    collate_eval = lambda x: hstu_eval_collate_fn(x, max_seq_len)
+    collate_train = lambda x: sasrec_collate_fn(x, max_seq_len, num_items=num_items if loss_type == "bce" else 0)
+    collate_eval = lambda x: sasrec_eval_collate_fn(x, max_seq_len)
 
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, collate_fn=collate_train)
     valid_dl = DataLoader(valid_ds, batch_size=eval_batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate_eval)
     test_dl = DataLoader(test_ds, batch_size=eval_batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate_eval)
 
-    # Model
-    model = CTR(
+    steps_per_epoch = (len(train_ds) + batch_size - 1) // batch_size
+    max_steps = steps_per_epoch * epochs
+    logger.info(f"Steps per epoch: {steps_per_epoch}, Total max steps: {max_steps}")
+
+    model = SASRecWithRank(
         num_items=num_items,
         max_seq_len=max_seq_len,
         embed_dim=embed_dim,
         num_heads=num_heads,
         num_blocks=num_blocks,
+        ffn_dim=ffn_dim,
         dropout=dropout,
-        num_position_buckets=num_position_buckets,
-        num_time_buckets=num_time_buckets,
-        use_temporal_bias=use_temporal_bias,
+        loss_type=loss_type,
+        lambda_ctr=lambda_ctr,
+        lambda_gen=lambda_gen,
         ctr_hidden_units=ctr_hidden_units,
         ctr_mode=ctr_mode,
         listnet_scale=listnet_scale,
+        gen_loss_decay=gen_loss_decay,
         max_steps=max_steps,
+        gen_as_aux_task=gen_as_aux_task,
+        use_last_token_for_ctr=use_last_token_for_ctr,
+        use_dot_product_logits=use_dot_product_logits,
     )
 
     optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(0.9, 0.98))
     train_dl, valid_dl, test_dl = accelerator.prepare(train_dl, valid_dl, test_dl)
     model, optimizer = accelerator.prepare(model, optimizer)
 
-    num_params = sum(p.numel() for p in model.parameters())
-    logger.info(f"Model params: {num_params:,}, Temporal bias: {use_temporal_bias}, Loss: {loss_type}")
+    logger.info(
+        f"Model params: {get_parameter_count(model):,}, Loss: {loss_type}, CTR mode: {ctr_mode}, "
+        f"Aux task: {gen_as_aux_task}, Dot-product CTR: {use_dot_product_logits}"
+    )
 
-    # Training
     global_step = 0
     best_recall = 0.0
     wait = 0
@@ -150,15 +160,12 @@ def train(
         for data in pbar:
             input_ids = data['input_ids']
             targets = data['targets']
-            timestamps = data['timestamps'] if use_temporal_bias else None
+            negatives = data.get('negatives', None)
 
-            if loss_type == "sampled_softmax":
-                _, loss = accelerator.unwrap_model(model).forward_sampled_softmax(
-                    input_ids, timestamps, targets,
-                    num_negatives=num_negatives, temperature=ss_temperature, l2_norm=ss_l2_norm,
-                )
+            if loss_type == "bce":
+                _, loss = model(input_ids, targets, negatives)
             else:
-                _, loss = model(input_ids, timestamps, targets)
+                _, loss = model(input_ids, targets)
 
             accelerator.backward(loss)
             optimizer.step()
@@ -175,20 +182,18 @@ def train(
         avg_loss = epoch_loss / len(train_dl)
         logger.info(f"Epoch {epoch} - loss: {avg_loss:.4f}")
 
-        # Evaluation
         if do_eval and (epoch + 1) % eval_every_epoch == 0:
-            metrics = evaluate(model, valid_dl, accelerator, use_temporal_bias)
-            test_metrics_epoch = evaluate(model, test_dl, accelerator, use_temporal_bias)
+            metrics = evaluate(model, valid_dl, accelerator)
+            test_metrics_epoch = evaluate(model, test_dl, accelerator)
             if accelerator.is_main_process:
                 logger.info(f"Epoch {epoch} - Valid: " + ", ".join([f"{k}={v:.4f}" for k, v in metrics.items()]))
                 logger.info(f"Epoch {epoch} - Test:  " + ", ".join([f"{k}={v:.4f}" for k, v in test_metrics_epoch.items()]))
                 if wandb_logging:
                     wandb.log({"epoch": epoch, **{f"eval/{k}": v for k, v in metrics.items()}, **{f"test_epoch/{k}": v for k, v in test_metrics_epoch.items()}})
 
-               # Save best model + early stopping
                 if metrics['Recall@10'] > best_recall:
                     best_recall = metrics['Recall@10']
-                    save_path = os.path.join(save_dir_root, f"{model_name}_best_model.pt")
+                    save_path = os.path.join(save_dir_root, f"{model_name}_best_model.pt" if model_name else "best_model.pt")
                     torch.save(accelerator.unwrap_model(model).state_dict(), save_path)
                     logger.info(f"New best Recall@10: {best_recall:.4f}, saved to {save_path}")
                     wait = 0
@@ -201,19 +206,17 @@ def train(
 
             model.train()
 
-        # Save checkpoint
         if accelerator.is_main_process and (epoch + 1) % save_every_epoch == 0:
             save_path = os.path.join(save_dir_root, f"checkpoint_epoch_{epoch}.pt")
             torch.save(accelerator.unwrap_model(model).state_dict(), save_path)
             logger.info(f"Saved checkpoint to {save_path}")
 
-    # Final test
     if accelerator.is_main_process:
-        best_path = os.path.join(save_dir_root, f"{model_name}_best_model.pt")
+        best_path = os.path.join(save_dir_root, f"{model_name}_best_model.pt" if model_name else "best_model.pt")
         if os.path.exists(best_path):
             accelerator.unwrap_model(model).load_state_dict(torch.load(best_path))
 
-    test_metrics = evaluate(model, test_dl, accelerator, use_temporal_bias)
+    test_metrics = evaluate(model, test_dl, accelerator)
     if accelerator.is_main_process:
         logger.info(f"Test Results: " + ", ".join([f"{k}={v:.4f}" for k, v in test_metrics.items()]))
         if wandb_logging:

@@ -1,9 +1,9 @@
 # HSTU config for Amazon dataset
 # Hierarchical Sequential Transduction Unit
-# Run: python genrec/trainers/unigcr_trainer.py config/unigcr/amazon.gin
+# Run: python genrec/trainers/augr_trainer.py config/hstu/amazon.gin
 
 import genrec.data.amazon_hstu
-import genrec.models.hstu_unigcr
+import genrec.models.hstu_augr
 
 # =============================================================================
 # Training Settings
@@ -23,17 +23,17 @@ train.num_blocks = 2
 train.dropout = 0.5
 
 # =============================================================================
-# Unigcr
+# AuGR
 # =============================================================================
 train.num_position_buckets = 32
 train.num_time_buckets = 64
 train.use_temporal_bias = True  # Set False to disable temporal bias (like SASRec)
-train.ctr_mode="bce"
+train.ctr_mode="listnet"
 train.listnet_scale = 20
 train.lambda_ctr = 0.7
 train.lambda_gen = 0.3
-train.gen_loss_decay = True
-train.model_name = "base-bce-ctr-{split}"
+train.gen_loss_decay = False
+train.model_name = "base-listnet-ctr-{split}-no-gen-decay"
 
 # =============================================================================
 # Dataset Settings
@@ -52,14 +52,14 @@ train.patience = 50
 # =============================================================================
 # Checkpoint Settings
 # =============================================================================
-train.save_dir_root = "out/unigcr/amazon/{split}"
+train.save_dir_root = "out/augr/amazon/{split}"
 train.save_every_epoch = 50
 
 # =============================================================================
 # Logging Settings
 # =============================================================================
 train.wandb_logging = True
-train.wandb_project = "unigcr_{split}_training"
+train.wandb_project = "augr_{split}_training"
 train.wandb_log_interval = 100
 
 # =============================================================================

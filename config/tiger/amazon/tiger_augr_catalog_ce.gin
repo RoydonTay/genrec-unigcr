@@ -1,0 +1,62 @@
+# TIGER config for Amazon dataset
+# Uses HuggingFace T5ForConditionalGeneration (best performing config)
+# Based on tiger_new_seq50: plain Adam, lr=1e-4, no scheduler, seq50
+
+include "config/base.gin"
+
+import genrec.data.amazon
+import genrec.models.tiger_augr
+
+# Training settings (plain Adam, no scheduler - best config)
+train.epochs=200
+train.learning_rate=1e-4
+train.weight_decay=0.0
+train.batch_size=256
+#train.infer_batch_size=96
+train.beam_size=30
+train.early_stop_patience=0
+train.eval_test_every_epoch=2
+train.use_direct_catalog_loss=True
+train.gen_loss_weight=1.0
+train.rank_loss_weight=0.3
+
+# Model architecture (HF T5 config)
+train.n_layers=8 # 4 for decoder and encoder each
+train.attn_dim=128
+train.dim_feedforward=1024
+train.embedding_dim = 128
+train.num_heads=6
+train.d_kv=64
+train.dropout=0.1
+#train.feed_forward_proj='relu'
+
+# Data config
+#train.codebook_size=256
+train.sem_id_dim=3
+train.max_seq_len=50
+
+# Dataset
+train.dataset=@AmazonSeqDataset
+train.dataset_folder="/home/work/chatbot-llms-3/bin.fu/genrec/genrec/data/dataset/amazon"
+AmazonSeqDataset.split="{split}"
+AmazonSeqDataset.encoder_model_name="/home/work/chatbot-llms-3/roydon.tay/genrec/t5-model/sentence-t5-xl"
+AmazonSeqDataset.add_disambiguation=False
+
+# RQVAE config (must match pretrained model)
+AmazonSeqDataset.rqvae_input_dim=768
+AmazonSeqDataset.rqvae_embed_dim=32
+AmazonSeqDataset.rqvae_hidden_dims=[512, 256, 128, 64]
+AmazonSeqDataset.rqvae_codebook_size=256
+AmazonSeqDataset.rqvae_n_layers=3
+
+# Pretrained RQVAE checkpoint path
+train.pretrained_rqvae_path="./out/tiger/amazon/{split}/rqvae_old/checkpoint_epoch_4999.pt"
+
+# Output
+train.save_dir_root="out/tiger/amazon/{split}/rank"
+
+# Logging
+train.wandb_logging=True
+train.wandb_project="tiger_{split}_training"
+train.wandb_log_interval=10
+train.wandb_run_name="mlp_ranking_tower"

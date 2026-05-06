@@ -7,7 +7,7 @@ import gin
 import torch
 import wandb
 
-from genrec.models.hstu_unigcr import UniGCR
+from genrec.models.hstu_augr import AuGR
 from genrec.modules.utils import parse_config, setup_logger
 from genrec.data.amazon_hstu import AmazonHSTUDataset, hstu_collate_fn, hstu_eval_collate_fn
 from genrec.trainers.trainer_utils import (
@@ -120,7 +120,7 @@ def train(
     test_dl = DataLoader(test_ds, batch_size=eval_batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate_eval)
 
     # Model
-    model = UniGCR(
+    model = AuGR(
         num_items=num_items,
         max_seq_len=max_seq_len,
         embed_dim=embed_dim,

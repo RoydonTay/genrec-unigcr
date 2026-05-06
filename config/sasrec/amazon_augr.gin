@@ -1,9 +1,9 @@
-# HSTU config for Amazon dataset
-# Hierarchical Sequential Transduction Unit
-# Run: python genrec/trainers/unigcr_trainer.py config/unigcr/amazon.gin
+# SASRec config for Amazon dataset
+# Self-Attentive Sequential Recommendation
+# Run: python genrec/trainers/sasrec_augr_trainer.py config/sasrec/amazon.gin
 
-import genrec.data.amazon_hstu
-import genrec.models.hstu_unigcr
+import genrec.data.amazon_sasrec
+import genrec.models.sasrec_augr
 
 # =============================================================================
 # Training Settings
@@ -14,26 +14,21 @@ train.learning_rate = 1e-3
 train.weight_decay = 0.0
 
 # =============================================================================
-# Model Settings
+# Model Settings (matching original paper)
 # =============================================================================
 train.max_seq_len = 50
 train.embed_dim = 64
-train.num_heads = 2
+train.num_heads = 1
 train.num_blocks = 2
+train.ffn_dim = 256
 train.dropout = 0.5
-
-# =============================================================================
-# Unigcr
-# =============================================================================
-train.num_position_buckets = 32
-train.num_time_buckets = 64
-train.use_temporal_bias = True  # Set False to disable temporal bias (like SASRec)
+train.loss_type = "ce"  # "bce" (original paper, 1 neg per pos) or "ce" (cross-entropy over all items)
 train.ctr_mode="listnet"
 train.listnet_scale = 20
-train.lambda_ctr = 0.5
-train.lambda_gen = 0.5
+train.lambda_ctr = 0.1
+train.lambda_gen = 1.0
 train.gen_loss_decay = False
-train.model_name = "base-listnet-ctr-{split}-v1"
+train.model_name = "base-listnet-ctr-{split}-no-gen-decay"
 
 # =============================================================================
 # Dataset Settings
@@ -52,14 +47,14 @@ train.patience = 50
 # =============================================================================
 # Checkpoint Settings
 # =============================================================================
-train.save_dir_root = "out/unigcr/amazon/{split}"
+train.save_dir_root = "out/sasrec/amazon/{split}"
 train.save_every_epoch = 50
 
 # =============================================================================
 # Logging Settings
 # =============================================================================
 train.wandb_logging = True
-train.wandb_project = "unigcr_{split}_training"
+train.wandb_project = "sasrec_augr_{split}"
 train.wandb_log_interval = 100
 
 # =============================================================================
