@@ -78,7 +78,7 @@ class AuGR(nn.Module):
         self.gen_as_aux_task = gen_as_aux_task
         self.use_last_token_for_ctr = use_last_token_for_ctr
         self.use_dot_product_logits = use_dot_product_logits
-        assert use_last_token_for_ctr != use_dot_product_logits, "use_last_token_for_ctr and use_dot_product_logits cannot both be True (ambiguous CTR input)"
+        assert use_last_token_for_ctr & use_dot_product_logits != True, "use_last_token_for_ctr and use_dot_product_logits cannot both be True (ambiguous CTR input)"
 
         if self.ctr_mode not in {"bce", "listnet"}:
             raise ValueError(f"Unsupported ctr_mode={ctr_mode}. Use 'bce' or 'listnet'.")
