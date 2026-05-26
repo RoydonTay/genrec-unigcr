@@ -430,9 +430,9 @@ class TaobaoAuGRGenModel(PreTrainedModel):
 
         if self.ctr_shallow_shortcut:
             h_shallow = self._shallow_encode(user_tokens)
-            ctr_input = torch.cat([h_user, h_item, h_shallow], dim=-1)
+            ctr_input = torch.cat([h_item, h_shallow], dim=-1)
         else:
-            ctr_input = torch.cat([h_user, h_item], dim=-1)
+            ctr_input = h_item
 
         logits_click = self.ctr_tower(ctr_input).squeeze(-1)
         gen_logits = self.gen_head(h_user)

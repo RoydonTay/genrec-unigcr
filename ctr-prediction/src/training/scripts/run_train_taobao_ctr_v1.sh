@@ -13,7 +13,7 @@ export WANDB_API_KEY=''  # set your Weights & Biases API key here or in the envi
 set -euo pipefail
 
 exp=${1:-local}
-DATASET_ROOT=${2:-"/home/work/chatbot-llms-3/roydon.tay/BARS-CTR/TaobaoAd_x1"} # set your dataset root path here
+DATASET_ROOT=${2:-"/path/to/dataset"} # set your dataset root path here
 
 # Inputs
 TRAIN_DATA_PATH=${TRAIN_DATA_PATH:-"${DATASET_ROOT}/train.csv"}
@@ -105,7 +105,6 @@ python -m src.training.train_taobao_gen_ctr \
   --dropout "${DROPOUT}" \
   --d_model "${D_MODEL}" \
   --lambda_gen "${LAMBDA_GEN}" \
-  --use_post_hstu_moe \
   --moe_num_experts ${MOE_NUM_EXPERTS} \
   --moe_load_balance ${MOE_LOAD_BALANCE} \
   --moe_top_k ${MOE_TOP_K} \
@@ -122,5 +121,4 @@ python -m src.training.train_taobao_gen_ctr \
   --lambda_gen 0.1 \
   --hstu_num_heads 2 \
   --hstu_num_blocks 4 \
-  --ctr_shallow_shortcut \
   --gen_loss_decay \
