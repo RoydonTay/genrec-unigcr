@@ -50,8 +50,8 @@ Only AuGR variants were ran by us, results from other models were obtained from 
 
 ## Reproducing the results
 Refer to the respective markdowns for the setup instructions.
-- CTR Prediction: [CTR Prediction README](ctr-prediction\README.md)
-- Sequential Recommendation: [Sequential Recommendation README](generative-recommendation\README.md)
+- CTR Prediction: [CTR Prediction README](https://github.com/RoydonTay/AuGR/tree/main/ctr-prediction)
+- Sequential Recommendation: [Sequential Recommendation README](https://github.com/RoydonTay/AuGR/tree/main/generative-recommendation)
 
 ## References
 - [https://phonism.github.io/genrec](https://phonism.github.io/genrec): GenRec: A Model Zoo for Generative Recommendation
