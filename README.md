@@ -2,6 +2,8 @@
 
 This is the official repository for the AuGR paper. This repository contains code to replicate the results obtained within the paper for public benchmarks, for both sequential recommendation and CTR prediction tasks.
 
+<img width="4564" height="2104" alt="AuGR_arch" src="https://github.com/user-attachments/assets/d273a244-b8c1-4799-a04f-25fe7ece23b3" />
+
 ## Results on Public Benchmarks
 
 ### Sequential Recommendation (Amazon 2014)
